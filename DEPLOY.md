@@ -40,7 +40,7 @@ Before deploying, ensure you configure your **OAuth Client ID** in the Google Cl
 Google Cloud Run can build your container using your local `Dockerfile` and deploy it directly in a single step using Google Cloud Build in the cloud:
 
 ```bash
-gcloud run deploy ge-api-explorer \
+gcloud run deploy ge-api-explorer-oauth2 \
   --source . \
   --region us-central1 \
   --allow-unauthenticated
