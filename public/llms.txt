@@ -1,0 +1,231 @@
+# Gemini Enterprise API Explorer — LLM Documentation
+
+This document describes the Discovery Engine REST API surface used to whitelabel
+Google's Gemini Enterprise: building your own chat UI, conversation history,
+agent management, search, and NotebookLM features on top of the API.
+
+Intended audience: LLMs and developers integrating these APIs. Everything below
+has been verified against a live Gemini Enterprise project unless marked
+otherwise.
+
+## Base URL and authentication
+
+- Base URL (global): `https://discoveryengine.googleapis.com/{version}`
+- Base URL (regional): `https://{region}-discoveryengine.googleapis.com/{version}`
+- Versions: `v1alpha` (most complete, includes agents + notebooks), `v1beta`, `v1`
+- Auth: OAuth2 bearer token, e.g. `Authorization: Bearer $(gcloud auth print-access-token)`
+- When using user credentials (not a service account), you MUST also send
+  `X-Goog-User-Project: {projectNumber}` or calls fail with 403.
+- Official REST reference: https://docs.cloud.google.com/gemini/enterprise/docs/reference/rest
+
+## Resource hierarchy
+
+```
+projects/{projectNumber}/locations/{region}                          ← location
+  /collections/{collection}                                          ← usually default_collection
+    /engines/{engineId}                                              ← a Gemini Enterprise app
+      /assistants/{assistant}                                        ← usually default_assistant
+        /agents/{agentId}                                            ← custom agents
+      /sessions/{sessionId}                                          ← conversations
+        /assistAnswers/{assistAnswerId}                              ← per-turn answer details
+      /servingConfigs/default_search                                 ← search/answer serving
+      /completionConfig                                              ← autocomplete
+    /dataStores/{dataStoreId}                                        ← knowledge sources
+      /branches/default_branch/documents/{documentId}                ← ingested documents
+  /notebooks/{notebookUuid}                                          ← NotebookLM (no collection/engine)
+    /sources/{sourceUuid}
+    /audioOverviews/{audioOverviewId}
+```
+
+## Sessions (conversation history)
+
+| Method | Endpoint |
+|---|---|
+| GET | `{engine}/sessions` — list; supports `pageSize`, `filter` (e.g. `userPseudoId = "user-1"`), `orderBy` (e.g. `update_time desc`) |
+| GET | `{engine}/sessions/{id}` — one session incl. turns; `includeAnswerDetails=true` for full history |
+| POST | `{engine}/sessions` — body: `{displayName, userPseudoId}` |
+| PATCH | `{engine}/sessions/{id}?updateMask=displayName` — rename a conversation |
+| POST | `{engine}/sessions/{id}:addContextFile` — body: `{fileName, mimeType, fileContents}` (base64); "attach file to chat" |
+| GET | `{engine}/sessions/{id}/assistAnswers/{answerId}` — full answer details: citations, grounding, references |
+| DELETE | `{engine}/sessions/{id}` |
+
+## Assistant / Chat
+
+| Method | Endpoint |
+|---|---|
+| POST | `{assistant}:streamAssist` — chat, streamed JSON chunks |
+| POST | `{assistant}:assist` — chat, single response |
+| GET | `{assistant}` — assistant config |
+| GET | `{engine}/assistants` — list assistants |
+| PATCH | `{assistant}?updateMask=generationConfig` — customize: `generationConfig.systemInstruction.additionalSystemInstruction` sets a custom persona/tone (key whitelabel API); also web grounding and enabled tools |
+
+### streamAssist request body
+
+```json
+{
+  "query": { "text": "user message" },
+  "session": "projects/.../engines/.../sessions/-",
+  "answerGenerationMode": "NORMAL",
+  "agentsConfig": { "agent": "projects/.../agents/AGENT_ID" }
+}
+```
+
+- `session` ending in `/sessions/-` auto-creates a session; the new session
+  resource name is returned in `sessionInfo.session` — reuse it to continue.
+- Response is a JSON array of chunks; assistant text accumulates in
+  `answer.replies[].groundedContent.content.text`.
+- Trivial greetings may return `answer.state: "SKIPPED"` with
+  `assistSkippedReasons: ["NON_ASSIST_SEEKING_QUERY_IGNORED"]`.
+- `agentsConfig.agent` routes to a specific agent (observed: routing may still
+  answer from the default assistant persona depending on deployment state).
+
+## Agents
+
+| Method | Endpoint |
+|---|---|
+| GET | `{assistant}/agents` — list (for an agent picker UI) |
+| GET | `{assistant}/agents/{id}` |
+| POST | `{assistant}/agents` — create (ADK, Dialogflow, or low-code; see below) |
+| PATCH | `{assistant}/agents/{id}` — update |
+| DELETE | `{assistant}/agents/{id}` |
+| POST | `{assistant}/agents/{id}:requestAgentReview` — empty body |
+| POST | `{assistant}/agents/{id}:rejectAgent` — body: `{"rejectionReason": "..."}` |
+| POST | `{assistant}/agents/{id}:withdrawAgent` — empty body |
+
+### Agent review state machine (verified live)
+
+```
+PRIVATE (draft) --requestAgentReview--> DISABLED (pending review)
+DISABLED --rejectAgent (admin, requires rejectionReason)--> PRIVATE
+DISABLED --withdrawAgent (author)--> PRIVATE
+DISABLED --admin approval (console; API shape unknown)--> deployed/shared
+```
+
+`rejectAgent` returns `FAILED_PRECONDITION "Agent is not in DISABLED state"`
+if the agent is not pending review.
+
+### Low-code agents (lowCodeAgentDefinition — NOT in public docs, verified working)
+
+`agents.create` accepts a `lowCodeAgentDefinition` with a graph of LLM agent
+nodes. Verified round-trip on v1alpha:
+
+```json
+{
+  "displayName": "My Agent",
+  "description": "What this agent does",
+  "lowCodeAgentDefinition": {
+    "nodes": [
+      {
+        "id": "root_agent",
+        "displayName": "My Agent",
+        "llmAgentNode": {
+          "model": "gemini-3.5-flash",
+          "instruction": "System prompt for this node",
+          "subAgentIds": ["sub_agent_1"],
+          "selectedTools": { "tool": [{ "name": "googleSearch" }] }
+        }
+      },
+      {
+        "id": "sub_agent_1",
+        "displayName": "Sub Agent",
+        "llmAgentNode": {
+          "description": "Routing description",
+          "model": "gemini-3.5-flash",
+          "instruction": "System prompt",
+          "selectedTools": { "tool": [{ "name": "googleSearch" }] }
+        }
+      }
+    ],
+    "rootAgentId": "root_agent"
+  }
+}
+```
+
+Gotchas (all verified):
+- Created agents are PRIVATE drafts. `nodes` = draft; `deployedNodes` /
+  `deployedRootAgentId` are OUTPUT-ONLY and cannot be patched. Deployment
+  happens via the review/approval workflow (admin approves in console).
+- PATCH requires re-sending `displayName` AND
+  `lowCodeAgentDefinition.draftDisplayName` every time, or it 400s.
+- `:deploy` and `:publish` verbs exist on the agent resource but their working
+  request shapes are undocumented; `:publish` returns 200 without deploying.
+- ADK agents instead use `adkAgentDefinition.provisionedReasoningEngine.reasoningEngine`
+  pointing at a Vertex AI reasoning engine.
+
+## Search & Answers (non-chat serving path)
+
+| Method | Endpoint |
+|---|---|
+| POST | `{engine}/servingConfigs/default_search:search` — body: `{query, pageSize}` |
+| POST | `{engine}/servingConfigs/default_search:answer` — body: `{query: {text}}`; generated answer + citations |
+| POST | `{engine}/servingConfigs/default_search:streamAnswer` — streaming variant |
+| POST | `{engine}/completionConfig:completeQuery` — body: `{query}`; autocomplete |
+
+## Engine & Data Stores
+
+| Method | Endpoint |
+|---|---|
+| GET | `{engine}` — engine config; `dataStoreIds[]` = data stores connected to this engine |
+| PATCH | `{engine}?updateMask=dataStoreIds` — attach/detach data stores |
+| GET | `{collection}/engines` — list engines (discover engine IDs) |
+| GET | `{collection}/dataStores` — list all data stores in collection |
+| GET | `{collection}/dataStores/{id}` — one data store's config |
+| GET | `{collection}/dataStores/{id}/branches/default_branch/documents` — browse documents |
+| GET | `.../documents/{docId}` — one document (resolve citations to sources) |
+
+## NotebookLM (v1alpha; lives under locations, not engines)
+
+| Method | Endpoint |
+|---|---|
+| GET | `{location}/notebooks:listRecentlyViewed?pageSize=N` — per-user notebook list |
+| GET | `{location}/notebooks/{uuid}` — one notebook (title, emoji, sources) |
+| POST | `{location}/notebooks` — body: `{title}` (only writable field) |
+| POST | `{location}/notebooks:batchDelete` — body: `{names: [full resource names]}` |
+| POST | `{location}/notebooks/{uuid}/sources:batchCreate` — add sources |
+| POST | `{location}/notebooks/{uuid}/sources:batchDelete` — body: `{names: [...]}` |
+| POST | `{location}/notebooks/{uuid}/audioOverviews` — generate Audio Overview (podcast) |
+| DELETE | `{location}/notebooks/{uuid}/audioOverviews/{id}` |
+| POST | `{location}/notebooks/{uuid}:share` — body: `{accountAndRoles: [{email, role}], notifyViaEmail}` |
+
+### Source upload variants (sources:batchCreate)
+
+Each entry in `userContents[]` is exactly ONE of:
+
+```json
+{ "textContent":  { "sourceName": "display name", "content": "raw text" } }
+{ "webContent":   { "sourceName": "display name", "url": "https://..." } }
+{ "videoContent": { ... } }
+{ "googleDriveContent": { ... } }
+{ "agentspaceContent":  { ... } }
+```
+
+### Audio overview generation
+
+```json
+{
+  "generationOptions": {
+    "episodeFocus": "what the hosts should focus on",
+    "languageCode": "en",
+    "sourceIds": [{ "id": "source-uuid" }]
+  }
+}
+```
+
+Generation is async — poll `GET {location}/notebooks/{uuid}` until the audio
+overview appears. `sourceIds` is optional (defaults to all sources).
+
+### NotebookLM web app URL
+
+`https://notebooklm.cloud.google.com/{region}/?project={projectNumber}`
+(project- and region-specific; admins distribute this URL to users).
+
+## General gotchas
+
+- Use the project NUMBER (not project ID) in paths and `X-Goog-User-Project`.
+- Notebook and source IDs are UUIDs; engine/data store IDs are slugs; session
+  and agent IDs are numeric strings.
+- PATCH endpoints generally want an explicit `?updateMask=...`.
+- Streaming endpoints (`:streamAssist`, `:streamAnswer`) return a JSON array
+  that arrives incrementally — parse leniently until the stream completes.
+- In zsh, `$VAR:streamAssist` mangles the URL (`:s` is a history modifier) —
+  always write `${VAR}:streamAssist` in shell scripts.

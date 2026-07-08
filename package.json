@@ -1,0 +1,12 @@
+{
+  "name": "ge-api-explorer",
+  "version": "0.1.0",
+  "description": "API explorer for whitelabeling Gemini Enterprise via the Discovery Engine API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
