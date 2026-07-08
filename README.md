@@ -29,8 +29,8 @@ Building your own chat UI, conversation history, agent picker, search page, or N
 ## Install & run
 
 ```sh
-git clone https://github.com/YOUR_ORG/ge-api-explorer.git
-cd ge-api-explorer
+git clone https://github.com/adithaha/ge-api-xplorer-oauth2.git
+cd ge-api-xplorer-oauth2
 npm start
 # → http://localhost:3400
 ```
@@ -120,9 +120,7 @@ This is a **local development tool** — the server makes API calls with *your* 
 - The proxy only accepts `application/json` requests and rejects foreign `Origin` headers, so other websites open in your browser can't drive it (CSRF).
 - Proxy targets are restricted to `discoveryengine.googleapis.com` (incl. regional hosts) with an anchored host check.
 - Static file serving normalizes and decodes paths and refuses anything outside `public/`.
-
-Don't deploy it to a shared host as-is — there is no user authentication.
-
+  
 ## License
 
 MIT
