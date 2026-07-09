@@ -85,7 +85,7 @@ function handleAuthLogin(req, res, parsedUrl) {
     return res.end(JSON.stringify({ error: 'Missing Client ID' }));
   }
 
-  const scope = 'https://www.googleapis.com/auth/cloud-platform';
+  const scope = query.get('scope') || 'https://www.googleapis.com/auth/cloud-platform';
   const protocol = getProtocol(req);
   const redirectUri = `${protocol}://${req.headers.host}/oauth2callback`;
 

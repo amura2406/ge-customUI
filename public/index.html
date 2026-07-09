@@ -43,6 +43,44 @@
       <p class="help-text">OAuth Client credentials are loaded automatically from server environment variables.</p>
     </div>
 
+    <div class="scopes-container">
+      <div class="scopes-title">OAuth Scopes</div>
+      <div class="scopes-list">
+        <label class="scope-item disabled-item">
+          <input type="checkbox" id="scope-cloud-platform" checked disabled />
+          <div class="scope-text">
+            <span class="scope-name">Google Cloud Platform <span class="required-badge">Required</span></span>
+            <span class="scope-desc">cloud-platform — Access to GCP & Discovery Engine APIs</span>
+          </div>
+        </label>
+        <label class="scope-item">
+          <input type="checkbox" id="scope-gmail-readonly" />
+          <div class="scope-text">
+            <span class="scope-name">Gmail Read-only</span>
+            <span class="scope-desc">gmail.readonly — Required for Gmail data stores</span>
+          </div>
+        </label>
+        <label class="scope-item">
+          <input type="checkbox" id="scope-drive-readonly" />
+          <div class="scope-text">
+            <span class="scope-name">Google Drive Read-only</span>
+            <span class="scope-desc">drive.readonly — Required for Drive data stores</span>
+          </div>
+        </label>
+        <label class="scope-item">
+          <input type="checkbox" id="scope-docs-readonly" />
+          <div class="scope-text">
+            <span class="scope-name">Google Documents Read-only</span>
+            <span class="scope-desc">documents.readonly — Required for Google Docs content</span>
+          </div>
+        </label>
+      </div>
+      <div class="input-group custom-scopes-group">
+        <label for="custom-scopes">Custom Scopes (Space-separated)</label>
+        <input type="text" id="custom-scopes" placeholder="e.g. https://www.googleapis.com/auth/userinfo.email" spellcheck="false" />
+      </div>
+    </div>
+
     <button id="btn-login-google">
       <svg class="google-icon" viewBox="0 0 24 24" width="18" height="18">
         <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>

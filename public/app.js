@@ -1674,6 +1674,17 @@ async function initAuth() {
     if (savedSecret) document.getElementById('oauth-client-secret').value = savedSecret;
   }
 
+  // Load scope selection preferences
+  const scopeGmail = document.getElementById('scope-gmail-readonly');
+  const scopeDrive = document.getElementById('scope-drive-readonly');
+  const scopeDocs = document.getElementById('scope-docs-readonly');
+  const scopeCustom = document.getElementById('custom-scopes');
+
+  if (scopeGmail) scopeGmail.checked = localStorage.getItem('ge-scope-gmail-readonly') === 'true';
+  if (scopeDrive) scopeDrive.checked = localStorage.getItem('ge-scope-drive-readonly') === 'true';
+  if (scopeDocs) scopeDocs.checked = localStorage.getItem('ge-scope-docs-readonly') === 'true';
+  if (scopeCustom) scopeCustom.value = localStorage.getItem('ge-scope-custom') || '';
+
   const token = await getValidToken();
   const appContainer = document.getElementById('app-container');
   const loginScreen = document.getElementById('login-screen');
@@ -1720,9 +1731,34 @@ document.getElementById('btn-login-google').addEventListener('click', () => {
     localStorage.setItem('ge-client-secret', clientSecret);
   }
 
-  let loginUrl = `/api/auth/login`;
+  // Save selected scopes in localStorage
+  const scopeGmail = document.getElementById('scope-gmail-readonly');
+  const scopeDrive = document.getElementById('scope-drive-readonly');
+  const scopeDocs = document.getElementById('scope-docs-readonly');
+  const scopeCustom = document.getElementById('custom-scopes');
+
+  localStorage.setItem('ge-scope-gmail-readonly', scopeGmail ? scopeGmail.checked : 'false');
+  localStorage.setItem('ge-scope-drive-readonly', scopeDrive ? scopeDrive.checked : 'false');
+  localStorage.setItem('ge-scope-docs-readonly', scopeDocs ? scopeDocs.checked : 'false');
+  localStorage.setItem('ge-scope-custom', scopeCustom ? scopeCustom.value.trim() : '');
+
+  // Gather all scopes
+  const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
+  if (scopeGmail && scopeGmail.checked) scopes.push('https://www.googleapis.com/auth/gmail.readonly');
+  if (scopeDrive && scopeDrive.checked) scopes.push('https://www.googleapis.com/auth/drive.readonly');
+  if (scopeDocs && scopeDocs.checked) scopes.push('https://www.googleapis.com/auth/documents.readonly');
+  
+  if (scopeCustom && scopeCustom.value.trim()) {
+    const customList = scopeCustom.value.trim().split(/\s+/);
+    customList.forEach(s => {
+      if (s && !scopes.includes(s)) scopes.push(s);
+    });
+  }
+  const scopeString = scopes.join(' ');
+
+  let loginUrl = `/api/auth/login?scope=${encodeURIComponent(scopeString)}`;
   if (clientId && clientSecret) {
-    loginUrl += `?client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}`;
+    loginUrl += `&client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}`;
   }
   window.location.href = loginUrl;
 });
