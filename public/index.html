@@ -76,7 +76,10 @@
       <label>Project number<input id="cfg-project" placeholder="e.g. 123456789012" /></label>
       <label>Region<input id="cfg-region" value="global" placeholder="global" /></label>
       <label>Collection<input id="cfg-collection" value="default_collection" /></label>
-      <label>Engine<input id="cfg-engine" placeholder="your-engine-id" /></label>
+      <label>Engine
+        <input id="cfg-engine" list="engines-list" placeholder="your-engine-id" />
+        <datalist id="engines-list"></datalist>
+      </label>
       <label>Assistant<input id="cfg-assistant" value="default_assistant" /></label>
       <label>API version
         <select id="cfg-version">
@@ -97,6 +100,10 @@
         <p id="api-desc"></p>
         <p id="api-doc-link" class="hidden"></p>
         <div id="api-params"></div>
+        <div id="custom-stream-assist-form-wrap" class="hidden">
+          <h3>Interactive StreamAssist Request Form</h3>
+          <div id="custom-stream-assist-form"></div>
+        </div>
         <div id="api-body-wrap" class="hidden">
           <h3>Request body</h3>
           <textarea id="api-body" rows="12" spellcheck="false"></textarea>
@@ -112,8 +119,15 @@
         <pre id="res-params" class="code"></pre>
         <h3>Request body</h3>
         <pre id="res-body" class="code"></pre>
-        <h3>Response <span id="res-status"></span></h3>
+        <div class="response-header">
+          <h3>Response <span id="res-status"></span></h3>
+          <div id="response-toggle-wrap" class="hidden">
+            <button id="btn-toggle-raw" class="toggle-btn active">Raw JSON</button>
+            <button id="btn-toggle-rendered" class="toggle-btn">Rendered Output</button>
+          </div>
+        </div>
         <pre id="res-json" class="code response"></pre>
+        <div id="res-rendered" class="rendered-response hidden"></div>
         <h3>cURL <button id="btn-copy-curl">Copy</button></h3>
         <pre id="res-curl" class="code"></pre>
       </div>

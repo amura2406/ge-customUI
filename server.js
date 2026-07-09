@@ -2,6 +2,32 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+// ---- Load local .env if it exists (zero-dependency) ----
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    envContent.split(/\r?\n/).forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) return;
+      const index = trimmed.indexOf('=');
+      if (index > 0) {
+        const key = trimmed.substring(0, index).trim();
+        let val = trimmed.substring(index + 1).trim();
+        // Remove surrounding quotes if present
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.substring(1, val.length - 1);
+        }
+        if (!process.env[key]) {
+          process.env[key] = val;
+        }
+      }
+    });
+  }
+} catch (err) {
+  console.warn('Error reading .env file:', err.message);
+}
+
 const PORT = process.env.PORT || 3400;
 const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -43,7 +69,8 @@ function getCookie(req, name) {
 function handleAuthConfig(req, res) {
   res.writeHead(200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({
-    isConfigured: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET)
+    isConfigured: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
+    projectNumber: process.env.GOOGLE_PROJECT_NUMBER || ''
   }));
 }
 

@@ -9,6 +9,11 @@ Building your own chat UI, conversation history, agent picker, search page, or N
 ## Features
 
 - **40+ curated endpoints** organized by whitelabel use case — sessions (conversation history), chat (`streamAssist` / `assist`), agents (including the undocumented low-code agent builder and the review/approval workflow), search & answers, engines, data stores, documents, and NotebookLM (notebooks, sources, audio overviews, sharing).
+- **Interactive Parameters Form** — Selecting `streamAssist` or `assist` replaces raw JSON editing with custom forms: textarea query boxes, selective Answer Generation Mode dropdowns, and dataStore checklists.
+- **Automated DataStore Discovery** — Queries active engines under the hood via the proxy using `engines.get` to auto-populate connected dataStore checklists, featuring a manual override element to add sandbox IDs.
+- **Multiturn Chat view** — Maintains ongoing conversation histories. Intercepts session names returned under `sessionInfo.session` to overwrite active Session inputs, renders alignment bubbles, streams text live with blink-dot loader indicators, and provides a clear/reset session control panel.
+- **Color-Coded JSON Syntax Highlighter** — Colorizes keys (soft teal), strings (warm lime), numbers (pastel orange), booleans (soft amber), and nulls (coral red) across all panels.
+- **Dynamic Engine ComboBox** — Pre-populates all engine IDs on field focus, extracting the trailing resource path slug (e.g. `gemini-enterprise-17835828_1783582887219`) to show in an HTML5 native autocomplete combobox.
 - **Streaming support** — `streamAssist` / `streamAnswer` responses render incrementally as chunks arrive.
 - **Link to the official docs** for each API, matching your selected API version.
 - **LLM docs** — the **LLM docs** button (top right) opens an in-browser viewer for [`public/llms.txt`](public/llms.txt), a condensed, LLM-friendly reference of all the endpoints, request shapes, and gotchas. View it, download it, or paste it into your AI coding assistant's context when building your integration. The raw file is also served at `/llms.txt`.

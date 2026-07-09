@@ -725,22 +725,450 @@ function selectApi(api, btn) {
     paramsEl.appendChild(makeField('q-' + q.key, q.label + ' (query param)', '', q.default || ''));
   });
 
-  // Request body editor
+  // Request body editor and custom StreamAssist form
   const bodyWrap = document.getElementById('api-body-wrap');
-  if (api.body) {
-    bodyWrap.classList.remove('hidden');
-    const c = cfg();
-    const paths = resourcePaths(c);
-    let bodyText = JSON.stringify(api.body, null, 2);
-    bodyText = bodyText
-      .replace(/{enginePathFull}/g, paths.enginePath)
-      .replace(/{project}/g, c.project || '{project}')
-      .replace(/{region}/g, c.region);
-    document.getElementById('api-body').value = bodyText;
-  } else {
+  const customFormWrap = document.getElementById('custom-stream-assist-form-wrap');
+  const isAssist = api.id === 'assistants.streamAssist' || api.id === 'assistants.assist';
+
+  if (isAssist) {
     bodyWrap.classList.add('hidden');
+    customFormWrap.classList.remove('hidden');
+    renderStreamAssistForm(api);
+  } else {
+    customFormWrap.classList.add('hidden');
+    if (api.body) {
+      bodyWrap.classList.remove('hidden');
+      const c = cfg();
+      const paths = resourcePaths(c);
+      let bodyText = JSON.stringify(api.body, null, 2);
+      bodyText = bodyText
+        .replace(/{enginePathFull}/g, paths.enginePath)
+        .replace(/{project}/g, c.project || '{project}')
+        .replace(/{region}/g, c.region);
+      document.getElementById('api-body').value = bodyText;
+    } else {
+      bodyWrap.classList.add('hidden');
+    }
   }
 }
+
+// ---------- Background Fetching Helper ----------
+async function fetchEngineDataStores() {
+  const c = cfg();
+  if (!c.project || !c.engine) {
+    throw new Error('Project and Engine configuration are required');
+  }
+  const paths = resourcePaths(c);
+  const url = `${baseUrl(c)}/${paths.enginePath}`;
+  const token = await getValidToken();
+  if (!token) {
+    throw new Error('No valid token available');
+  }
+
+  const resp = await fetch('/api/proxy', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ url, method: 'GET', body: null, project: c.project }),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`HTTP error ${resp.status}`);
+  }
+
+  const data = await resp.json();
+  return data.dataStoreIds || [];
+}
+
+// ---------- Render StreamAssist Form ----------
+function renderStreamAssistForm(api) {
+  const container = document.getElementById('custom-stream-assist-form');
+  if (!container) return;
+  container.innerHTML = ''; // Clear previous fields
+
+  // 1. Query Text field
+  const queryGroup = document.createElement('div');
+  queryGroup.className = 'form-field';
+  const queryLabel = document.createElement('label');
+  queryLabel.innerHTML = '<span>Query Text</span>';
+  const queryTextarea = document.createElement('textarea');
+  queryTextarea.id = 'sa-query-text';
+  queryTextarea.rows = 3;
+  queryTextarea.spellcheck = false;
+
+  let defaultQuery = 'Hello! What can you help me with?';
+  try {
+    const currentJson = JSON.parse(document.getElementById('api-body').value);
+    if (currentJson?.query?.text) {
+      defaultQuery = currentJson.query.text;
+    }
+  } catch (e) {
+    if (api.body?.query?.text) {
+      defaultQuery = api.body.query.text;
+    }
+  }
+  queryTextarea.value = defaultQuery;
+  queryLabel.appendChild(queryTextarea);
+  queryGroup.appendChild(queryLabel);
+  container.appendChild(queryGroup);
+
+  // 2. Session field
+  const sessionGroup = document.createElement('div');
+  sessionGroup.className = 'form-field';
+  const sessionLabel = document.createElement('label');
+  sessionLabel.innerHTML = '<span>Session Resource Name</span>';
+  const sessionInput = document.createElement('input');
+  sessionInput.id = 'sa-session';
+  sessionInput.type = 'text';
+  sessionInput.spellcheck = false;
+
+  const c = cfg();
+  const paths = resourcePaths(c);
+  let defaultSession = `${paths.enginePath}/sessions/-`;
+  try {
+    const currentJson = JSON.parse(document.getElementById('api-body').value);
+    if (currentJson?.session) {
+      defaultSession = currentJson.session;
+    }
+  } catch (e) {
+    if (api.body?.session) {
+      defaultSession = api.body.session.replace(/{enginePathFull}/g, paths.enginePath);
+    }
+  }
+  sessionInput.value = defaultSession;
+  sessionLabel.appendChild(sessionInput);
+  sessionGroup.appendChild(sessionLabel);
+  container.appendChild(sessionGroup);
+
+  // 3. Answer Generation Mode select
+  const modeGroup = document.createElement('div');
+  modeGroup.className = 'form-field';
+  const modeLabel = document.createElement('label');
+  modeLabel.innerHTML = '<span>Answer Generation Mode</span>';
+  const modeSelect = document.createElement('select');
+  modeSelect.id = 'sa-mode';
+
+  const modes = ['NORMAL', 'ADVANCED', 'ANSWER_GENERATION_MODE_UNSPECIFIED'];
+  modes.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = m;
+    modeSelect.appendChild(opt);
+  });
+
+  let defaultMode = 'NORMAL';
+  try {
+    const currentJson = JSON.parse(document.getElementById('api-body').value);
+    if (currentJson?.answerGenerationMode) {
+      defaultMode = currentJson.answerGenerationMode;
+    }
+  } catch (e) {
+    if (api.body?.answerGenerationMode) {
+      defaultMode = api.body.answerGenerationMode;
+    }
+  }
+  modeSelect.value = defaultMode;
+  modeLabel.appendChild(modeSelect);
+  modeGroup.appendChild(modeLabel);
+  container.appendChild(modeGroup);
+
+  // 4. Data Stores checklist container
+  const dsGroup = document.createElement('div');
+  dsGroup.className = 'form-field';
+  
+  const dsLabelSpan = document.createElement('span');
+  dsLabelSpan.textContent = 'Data Store Specifications (dataStoreSpecs)';
+  dsGroup.appendChild(dsLabelSpan);
+
+  const dsChecklistContainer = document.createElement('div');
+  dsChecklistContainer.className = 'datastore-checklist-container';
+  dsChecklistContainer.id = 'sa-datastore-checklist-container';
+
+  const loadingEl = document.createElement('div');
+  loadingEl.id = 'sa-datastore-loading';
+  loadingEl.style.color = 'var(--muted)';
+  loadingEl.style.fontSize = '12px';
+  loadingEl.textContent = 'Attempting to fetch connected data stores for the active engine...';
+  dsChecklistContainer.appendChild(loadingEl);
+
+  dsGroup.appendChild(dsChecklistContainer);
+  container.appendChild(dsGroup);
+
+  // Immediately initialize JSON with baseline values
+  syncStreamAssistFormToJson();
+
+  // Asynchronously load dataStoreIds
+  fetchEngineDataStores()
+    .then(dataStoreIds => {
+      renderDataStoreSpecsList(dataStoreIds);
+    })
+    .catch(err => {
+      console.warn('Failed to fetch engine data stores:', err);
+      renderDataStoreSpecsList([]);
+    });
+}
+
+// ---------- Render checklist of Data Stores ----------
+function renderDataStoreSpecsList(dataStoreIds) {
+  const container = document.getElementById('sa-datastore-checklist-container');
+  if (!container) return;
+
+  container.innerHTML = ''; // clear loading message
+
+  const title = document.createElement('div');
+  title.className = 'datastore-checklist-title';
+  title.textContent = 'Select Data Stores to Query:';
+  container.appendChild(title);
+
+  const listWrap = document.createElement('div');
+  listWrap.id = 'sa-datastore-list-wrap';
+  container.appendChild(listWrap);
+
+  // Attempt to parse existing dataStoreSpecs from textarea to restore checked states/inputs
+  let existingSpecs = {};
+  try {
+    const currentJson = JSON.parse(document.getElementById('api-body').value);
+    if (currentJson?.dataStoreSpecs && Array.isArray(currentJson.dataStoreSpecs)) {
+      currentJson.dataStoreSpecs.forEach(spec => {
+        const parts = spec.dataStore.split('/');
+        const dsId = parts[parts.length - 1];
+        const querySpec = spec.querySpec || {};
+        const searchSpec = querySpec.searchSpec || {};
+        const maxResultsVal = spec.numResults !== undefined ? spec.numResults : 
+                             (searchSpec.maxResults !== undefined ? searchSpec.maxResults : 
+                             (spec.maxResults !== undefined ? spec.maxResults : 10));
+        existingSpecs[dsId] = {
+          checked: true,
+          filter: spec.filter || querySpec.filter || '',
+          maxResults: maxResultsVal
+        };
+      });
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  // Render checkable entries
+  if (dataStoreIds && dataStoreIds.length > 0) {
+    dataStoreIds.forEach(dsId => {
+      const specState = existingSpecs[dsId] || { checked: false, filter: '', maxResults: 10 };
+      const itemEl = createDataStoreItemElement(dsId, specState.checked, specState.filter, specState.maxResults);
+      listWrap.appendChild(itemEl);
+    });
+  } else {
+    const emptyEl = document.createElement('div');
+    emptyEl.style.color = 'var(--muted)';
+    emptyEl.style.fontSize = '12px';
+    emptyEl.style.marginBottom = '8px';
+    emptyEl.textContent = 'No connected data stores found for this engine. Add custom entries below.';
+    listWrap.appendChild(emptyEl);
+  }
+
+  // Render any manually added specs that were already in the JSON body but are not in the fetched list
+  Object.keys(existingSpecs).forEach(dsId => {
+    if (!dataStoreIds.includes(dsId)) {
+      const specState = existingSpecs[dsId];
+      const itemEl = createDataStoreItemElement(dsId, specState.checked, specState.filter, specState.maxResults);
+      listWrap.appendChild(itemEl);
+    }
+  });
+
+  // Small text input + "+" button for custom manual data store IDs
+  const manualAddContainer = document.createElement('div');
+  manualAddContainer.className = 'custom-datastore-add';
+
+  const manualInput = document.createElement('input');
+  manualInput.type = 'text';
+  manualInput.id = 'sa-manual-ds-id';
+  manualInput.placeholder = 'Enter Custom Data Store ID (e.g. datastore-1)';
+
+  const manualBtn = document.createElement('button');
+  manualBtn.type = 'button';
+  manualBtn.textContent = '+ Add Store';
+
+  manualBtn.addEventListener('click', () => {
+    const dsId = manualInput.value.trim();
+    if (!dsId) return;
+
+    const existingCbs = Array.from(document.querySelectorAll('.sa-datastore-checkbox'));
+    const duplicate = existingCbs.some(cb => cb.dataset.id === dsId);
+    if (duplicate) {
+      alert('Data Store ID already in the list.');
+      return;
+    }
+
+    const emptyMsg = listWrap.querySelector('div');
+    if (emptyMsg && emptyMsg.textContent.includes('No connected data stores found')) {
+      emptyMsg.remove();
+    }
+
+    const itemEl = createDataStoreItemElement(dsId, true, '', 10);
+    listWrap.appendChild(itemEl);
+
+    manualInput.value = '';
+    syncStreamAssistFormToJson();
+  });
+
+  manualInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      manualBtn.click();
+    }
+  });
+
+  manualAddContainer.appendChild(manualInput);
+  manualAddContainer.appendChild(manualBtn);
+  container.appendChild(manualAddContainer);
+}
+
+// ---------- Create Data Store Checkbox and Spec Inputs ----------
+function createDataStoreItemElement(dsId, checked, filter, maxResults) {
+  const itemEl = document.createElement('div');
+  itemEl.className = 'datastore-item';
+
+  const checkboxLabel = document.createElement('label');
+  checkboxLabel.className = 'datastore-checkbox-label';
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.className = 'sa-datastore-checkbox';
+  checkbox.dataset.id = dsId;
+  checkbox.checked = checked;
+
+  checkboxLabel.appendChild(checkbox);
+  checkboxLabel.appendChild(document.createTextNode(dsId));
+  itemEl.appendChild(checkboxLabel);
+
+  // Specs grid: exposed when checked
+  const specsGrid = document.createElement('div');
+  specsGrid.className = 'datastore-specs-grid';
+  if (!checked) {
+    specsGrid.style.display = 'none';
+  }
+
+  // Filter input
+  const filterLabel = document.createElement('label');
+  filterLabel.innerHTML = '<span>Filter Expression</span>';
+  const filterInput = document.createElement('input');
+  filterInput.type = 'text';
+  filterInput.className = 'sa-ds-filter';
+  filterInput.placeholder = 'e.g. state = "CA"';
+  filterInput.value = filter || '';
+  filterLabel.appendChild(filterInput);
+  specsGrid.appendChild(filterLabel);
+
+  // MaxResults input
+  const maxResultsLabel = document.createElement('label');
+  maxResultsLabel.innerHTML = '<span>Max Results</span>';
+  const maxResultsInput = document.createElement('input');
+  maxResultsInput.type = 'number';
+  maxResultsInput.className = 'sa-ds-max-results';
+  maxResultsInput.placeholder = '10';
+  maxResultsInput.value = maxResults !== undefined ? maxResults : 10;
+  maxResultsLabel.appendChild(maxResultsInput);
+  specsGrid.appendChild(maxResultsLabel);
+
+  itemEl.appendChild(specsGrid);
+
+  checkbox.addEventListener('change', () => {
+    if (checkbox.checked) {
+      specsGrid.style.display = 'grid';
+    } else {
+      specsGrid.style.display = 'none';
+    }
+    syncStreamAssistFormToJson();
+  });
+
+  return itemEl;
+}
+
+// ---------- Form to JSON Compiler ----------
+function syncStreamAssistFormToJson() {
+  if (!currentApi) return;
+
+  const queryText = document.getElementById('sa-query-text')?.value || '';
+  const sessionVal = document.getElementById('sa-session')?.value || '';
+  const modeVal = document.getElementById('sa-mode')?.value || 'NORMAL';
+
+  const dataStoreSpecs = [];
+  const checkboxes = document.querySelectorAll('.sa-datastore-checkbox');
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      const dsId = cb.dataset.id;
+      const itemEl = cb.closest('.datastore-item');
+      const filterVal = itemEl.querySelector('.sa-ds-filter')?.value.trim() || '';
+      const maxResultsVal = parseInt(itemEl.querySelector('.sa-ds-max-results')?.value || '10', 10);
+
+      const c = cfg();
+      const project = c.project || '{project}';
+      const region = c.region || 'global';
+      const collection = c.collection || 'default_collection';
+
+      const dataStorePath = `projects/${project}/locations/${region}/collections/${collection}/dataStores/${dsId}`;
+
+      const spec = {
+        dataStore: dataStorePath
+      };
+
+      if (filterVal) {
+        spec.filter = filterVal;
+      }
+
+      if (!isNaN(maxResultsVal)) {
+        spec.numResults = maxResultsVal;
+      }
+
+      dataStoreSpecs.push(spec);
+    }
+  });
+
+  const bodyObj = {
+    query: { text: queryText },
+    session: sessionVal,
+  };
+
+  if (currentApi.id === 'assistants.streamAssist') {
+    bodyObj.answerGenerationMode = modeVal;
+  }
+
+  if (dataStoreSpecs.length > 0) {
+    bodyObj.dataStoreSpecs = dataStoreSpecs;
+  }
+
+  document.getElementById('api-body').value = JSON.stringify(bodyObj, null, 2);
+}
+
+// Bind real-time event delegation on the form
+document.getElementById('custom-stream-assist-form').addEventListener('input', syncStreamAssistFormToJson);
+document.getElementById('custom-stream-assist-form').addEventListener('change', syncStreamAssistFormToJson);
+
+// Auto-refresh checklist on config change
+['cfg-project', 'cfg-engine'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if (currentApi && (currentApi.id === 'assistants.streamAssist' || currentApi.id === 'assistants.assist')) {
+      const checklistContainer = document.getElementById('sa-datastore-checklist-container');
+      if (checklistContainer) {
+        checklistContainer.innerHTML = '';
+        const loading = document.createElement('div');
+        loading.id = 'sa-datastore-loading';
+        loading.style.color = 'var(--muted)';
+        loading.style.fontSize = '12px';
+        loading.textContent = 'Project or Engine changed. Fetching connected data stores...';
+        checklistContainer.appendChild(loading);
+      }
+      fetchEngineDataStores()
+        .then(dataStoreIds => {
+          renderDataStoreSpecsList(dataStoreIds);
+        })
+        .catch(err => {
+          console.warn('Failed to fetch engine data stores:', err);
+          renderDataStoreSpecsList([]);
+        });
+    }
+  });
+});
 
 function makeField(id, label, placeholder, defVal) {
   const wrap = document.createElement('label');
@@ -808,18 +1236,56 @@ async function sendRequest() {
     }
   }
 
+  const isChat = currentApi.id === 'assistants.streamAssist' || currentApi.id === 'assistants.assist';
+  let queryText = '';
+  if (isChat) {
+    queryText = document.getElementById('sa-query-text')?.value.trim() || '';
+    const sessionInputVal = document.getElementById('sa-session')?.value || '';
+    if (sessionInputVal.endsWith('/sessions/-') || !activeSessionId) {
+      chatHistory = [];
+      activeSessionId = null;
+    }
+    if (queryText) {
+      // Avoid duplicating the user query if we already have it at the end of history
+      const lastItem = chatHistory[chatHistory.length - 1];
+      if (!lastItem || lastItem.role !== 'user' || lastItem.text !== queryText) {
+        chatHistory.push({ role: 'user', text: queryText });
+      }
+    }
+  }
+
+  // Hide toggle controls and clear rendered response container
+  document.getElementById('response-toggle-wrap').classList.add('hidden');
+  
+  if (isChat) {
+    renderMultiTurnChat('res-rendered', chatHistory, '', [], true);
+    document.getElementById('res-rendered').classList.remove('hidden');
+  } else {
+    document.getElementById('res-rendered').innerHTML = '';
+    document.getElementById('res-rendered').classList.add('hidden');
+  }
+  
+  document.getElementById('res-json').classList.remove('hidden');
+  document.getElementById('btn-toggle-raw').classList.add('active');
+  document.getElementById('btn-toggle-rendered').classList.remove('active');
+
   // Show request info immediately
   const results = document.getElementById('results');
   results.classList.remove('hidden');
   setText('res-endpoint', `${currentApi.method} ${url}`);
-  setText('res-params', Object.keys(queryParams).length ? JSON.stringify(queryParams, null, 2) : '(none)');
-  setText('res-body', body ? JSON.stringify(body, null, 2) : '(none)');
-  setText('res-json', 'Sending…');
+  setJsonContent('res-params', Object.keys(queryParams).length ? queryParams : '(none)');
+  setJsonContent('res-body', body || '(none)');
+  document.getElementById('res-json').textContent = 'Sending…';
   setText('res-status', '');
   setText('res-curl', buildCurl(currentApi.method, url, body, c.project));
 
   const btn = document.getElementById('btn-send');
   btn.disabled = true;
+
+  if (isChat) {
+    // For chat endpoints, focus rendered response immediately
+    document.getElementById('btn-toggle-rendered').click();
+  }
 
   const token = await getValidToken();
   if (!token) {
@@ -846,20 +1312,119 @@ async function sendRequest() {
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let raw = '';
-      setText('res-json', '');
+      document.getElementById('res-json').textContent = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         raw += decoder.decode(value, { stream: true });
-        setText('res-json', prettyMaybe(raw));
+        
+        // Render raw highlighted JSON
+        setJsonContent('res-json', raw);
+        
+        // Extract and render streamed text & suggestion chips
+        const parsedObjects = extractJsonObjects(raw);
+        const chatContent = extractChatContent(parsedObjects);
+        
+        if (isChat) {
+          // Track and update session ID if available
+          let returnedSessionName = '';
+          for (const obj of parsedObjects) {
+            if (obj.sessionInfo?.session) {
+              returnedSessionName = obj.sessionInfo.session;
+            }
+          }
+          if (returnedSessionName && returnedSessionName !== activeSessionId) {
+            activeSessionId = returnedSessionName;
+            const sInput = document.getElementById('sa-session');
+            if (sInput) {
+              sInput.value = returnedSessionName;
+              syncStreamAssistFormToJson();
+            }
+          }
+
+          if (chatContent.text) {
+            renderMultiTurnChat('res-rendered', chatHistory, chatContent.text, chatContent.suggestions, true);
+            document.getElementById('response-toggle-wrap').classList.remove('hidden');
+          }
+        } else if (chatContent.text) {
+          renderChatResponse('res-rendered', chatContent.text, chatContent.suggestions);
+          document.getElementById('response-toggle-wrap').classList.remove('hidden');
+        }
       }
-      setText('res-json', prettyMaybe(raw));
+      
+      // Final render
+      setJsonContent('res-json', raw);
+      const parsedObjects = extractJsonObjects(raw);
+      const chatContent = extractChatContent(parsedObjects);
+      
+      if (isChat && chatContent.text) {
+        chatHistory.push({ role: 'model', text: chatContent.text, suggestions: chatContent.suggestions });
+        renderMultiTurnChat('res-rendered', chatHistory, '', [], false);
+        document.getElementById('response-toggle-wrap').classList.remove('hidden');
+        
+        // Clear the Query Input text area
+        const queryInput = document.getElementById('sa-query-text');
+        if (queryInput) {
+          queryInput.value = '';
+          syncStreamAssistFormToJson();
+        }
+      } else if (chatContent.text) {
+        renderChatResponse('res-rendered', chatContent.text, chatContent.suggestions);
+        document.getElementById('response-toggle-wrap').classList.remove('hidden');
+      }
     } else {
       const text = await resp.text();
-      setText('res-json', prettyMaybe(text));
+      setJsonContent('res-json', text);
+      
+      // Also extract and render text for non-streaming response if possible
+      try {
+        const parsed = JSON.parse(text);
+        const parsedObjects = Array.isArray(parsed) ? parsed : [parsed];
+        const chatContent = extractChatContent(parsedObjects);
+        
+        if (isChat) {
+          // Capture session Info
+          let returnedSessionName = '';
+          for (const obj of parsedObjects) {
+            if (obj.sessionInfo?.session) {
+              returnedSessionName = obj.sessionInfo.session;
+            } else if (obj.session) {
+              returnedSessionName = obj.session;
+            }
+          }
+          if (returnedSessionName && returnedSessionName !== activeSessionId) {
+            activeSessionId = returnedSessionName;
+            const sInput = document.getElementById('sa-session');
+            if (sInput) {
+              sInput.value = returnedSessionName;
+              syncStreamAssistFormToJson();
+            }
+          }
+
+          if (chatContent.text) {
+            chatHistory.push({ role: 'model', text: chatContent.text, suggestions: chatContent.suggestions });
+            renderMultiTurnChat('res-rendered', chatHistory, '', [], false);
+            document.getElementById('response-toggle-wrap').classList.remove('hidden');
+            
+            // Clear Query
+            const queryInput = document.getElementById('sa-query-text');
+            if (queryInput) {
+              queryInput.value = '';
+              syncStreamAssistFormToJson();
+            }
+          }
+        } else if (chatContent.text) {
+          renderChatResponse('res-rendered', chatContent.text, chatContent.suggestions);
+          document.getElementById('response-toggle-wrap').classList.remove('hidden');
+          // For chat assist, let's default to showing the rendered response!
+          btnToggleRendered.click();
+        }
+      } catch (err) {
+        // Not JSON or no text extracted
+      }
     }
   } catch (e) {
-    setText('res-json', 'Request failed: ' + e.message);
+    document.getElementById('res-json').textContent = 'Request failed: ' + e.message;
     document.getElementById('res-status').textContent = 'ERROR';
     document.getElementById('res-status').className = 'err';
   } finally {
@@ -890,6 +1455,136 @@ document.getElementById('btn-copy-curl').addEventListener('click', async () => {
   btn.textContent = 'Copied!';
   setTimeout(() => (btn.textContent = 'Copy'), 1500);
 });
+
+// ---------- Multiturn Chat System State & Renderers ----------
+let chatHistory = [];
+let activeSessionId = null;
+
+function renderMultiTurnChat(containerId, history, activeStreamText, activeSuggestions, isTyping) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = '';
+  document.getElementById('response-toggle-wrap').classList.remove('hidden');
+
+  // Create the main chat container
+  const chatWrap = document.createElement('div');
+  chatWrap.className = 'chat-container';
+
+  // 1. Add Chat Header with "Reset Session / Clear Chat" button
+  const header = document.createElement('div');
+  header.className = 'chat-control-header';
+  
+  const title = document.createElement('span');
+  title.style.fontWeight = '600';
+  title.style.fontSize = '12px';
+  title.style.color = 'var(--muted)';
+  title.textContent = 'Active Multi-turn Conversation';
+  header.appendChild(title);
+  
+  const clearBtn = document.createElement('button');
+  clearBtn.id = 'btn-clear-chat';
+  clearBtn.textContent = 'Clear Chat / Reset Session';
+  clearBtn.addEventListener('click', resetChatSession);
+  header.appendChild(clearBtn);
+  
+  chatWrap.appendChild(header);
+
+  // 2. Render all past turns in history
+  history.forEach((turn) => {
+    const row = document.createElement('div');
+    row.className = `chat-bubble-row ${turn.role}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${turn.role}`;
+
+    if (turn.role === 'user') {
+      bubble.textContent = turn.text;
+    } else {
+      bubble.innerHTML = parseMarkdownToHtml(turn.text);
+      
+      // Render suggestion chips at the end of the turn if any
+      if (Array.isArray(turn.suggestions) && turn.suggestions.length > 0) {
+        const chipsContainer = document.createElement('div');
+        chipsContainer.className = 'suggestion-chips-container';
+        turn.suggestions.forEach(q => {
+          const chip = document.createElement('div');
+          chip.className = 'suggestion-chip';
+          chip.textContent = q;
+          chip.addEventListener('click', () => applySuggestion(q));
+          chipsContainer.appendChild(chip);
+        });
+        bubble.appendChild(chipsContainer);
+      }
+    }
+
+    row.appendChild(bubble);
+    chatWrap.appendChild(row);
+  });
+
+  // 3. Render active stream bubble
+  if (activeStreamText || isTyping) {
+    const row = document.createElement('div');
+    row.className = 'chat-bubble-row model';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble model';
+
+    if (activeStreamText) {
+      bubble.innerHTML = parseMarkdownToHtml(activeStreamText);
+    } else {
+      const typing = document.createElement('div');
+      typing.className = 'typing-indicator';
+      for (let i = 0; i < 3; i++) {
+        const dot = document.createElement('div');
+        dot.className = 'typing-dot';
+        typing.appendChild(dot);
+      }
+      bubble.appendChild(typing);
+    }
+
+    if (Array.isArray(activeSuggestions) && activeSuggestions.length > 0) {
+      const chipsContainer = document.createElement('div');
+      chipsContainer.className = 'suggestion-chips-container';
+      activeSuggestions.forEach(q => {
+        const chip = document.createElement('div');
+        chip.className = 'suggestion-chip';
+        chip.textContent = q;
+        chip.addEventListener('click', () => applySuggestion(q));
+        chipsContainer.appendChild(chip);
+      });
+      bubble.appendChild(chipsContainer);
+    }
+
+    row.appendChild(bubble);
+    chatWrap.appendChild(row);
+  }
+
+  container.appendChild(chatWrap);
+
+  // Auto-scroll
+  setTimeout(() => {
+    container.scrollTop = container.scrollHeight;
+  }, 50);
+}
+
+function resetChatSession() {
+  chatHistory = [];
+  activeSessionId = null;
+  
+  const sessionInput = document.getElementById('sa-session');
+  if (sessionInput) {
+    const c = cfg();
+    const paths = resourcePaths(c);
+    sessionInput.value = `${paths.enginePath}/sessions/-`;
+    syncStreamAssistFormToJson();
+  }
+  
+  renderMultiTurnChat('res-rendered', chatHistory, '', [], false);
+  const btnToggleRendered = document.getElementById('btn-toggle-rendered');
+  if (btnToggleRendered) {
+    btnToggleRendered.click();
+  }
+}
 
 function prettyMaybe(text) {
   try {
@@ -945,12 +1640,23 @@ async function getValidToken() {
 
 async function initAuth() {
   let serverConfigured = false;
+  let preloadedProjectNumber = '';
   try {
     const res = await fetch('/api/auth/config');
     const data = await res.json();
     serverConfigured = data.isConfigured;
+    preloadedProjectNumber = data.projectNumber || '';
   } catch (e) {
     console.error('Failed to load server auth config:', e);
+  }
+
+  // Preload project number from server env if present
+  if (preloadedProjectNumber) {
+    const projectInput = document.getElementById('cfg-project');
+    if (projectInput) {
+      projectInput.value = preloadedProjectNumber;
+      localStorage.setItem('ge-cfg-project', preloadedProjectNumber);
+    }
   }
 
   const credsForm = document.getElementById('credentials-form');
@@ -1026,6 +1732,365 @@ document.getElementById('btn-logout').addEventListener('click', logout);
 function setText(id, text) {
   document.getElementById(id).textContent = text;
 }
+
+// ---- Custom JSON Syntax Highlighting & Rendering ----
+function syntaxHighlightJson(json) {
+  if (typeof json !== 'string') {
+    json = JSON.stringify(json, null, 2);
+  }
+  // Escape HTML entities to prevent XSS
+  json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  
+  return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g, function (match) {
+    let cls = 'json-number';
+    if (/^"/.test(match)) {
+      if (/:$/.test(match)) {
+        cls = 'json-key';
+        return `<span class="${cls}">${match.slice(0, -1)}</span>:`;
+      } else {
+        cls = 'json-string';
+      }
+    } else if (/true|false/.test(match)) {
+      cls = 'json-boolean';
+    } else if (/null/.test(match)) {
+      cls = 'json-null';
+    }
+    return `<span class="${cls}">${match}</span>`;
+  });
+}
+
+function setJsonContent(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  
+  if (value === null || value === undefined || value === '(none)') {
+    el.textContent = String(value);
+    return;
+  }
+  
+  let jsonStr = '';
+  if (typeof value === 'object') {
+    jsonStr = JSON.stringify(value, null, 2);
+  } else if (typeof value === 'string') {
+    try {
+      jsonStr = JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      // Partial stream or non-JSON text
+      jsonStr = value;
+    }
+  }
+  
+  const trimmed = jsonStr.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    el.textContent = jsonStr;
+    return;
+  }
+  
+  el.innerHTML = syntaxHighlightJson(jsonStr);
+}
+
+// ---- Stream Lenient Parsing & Extraction ----
+function extractJsonObjects(rawStream) {
+  const objects = [];
+  let braceCount = 0;
+  let startIdx = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < rawStream.length; i++) {
+    const char = rawStream[i];
+
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (char === '\\') {
+        escape = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+    } else {
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{') {
+        if (braceCount === 0) {
+          startIdx = i;
+        }
+        braceCount++;
+      } else if (char === '}') {
+        braceCount--;
+        if (braceCount === 0 && startIdx !== -1) {
+          const candidate = rawStream.substring(startIdx, i + 1);
+          try {
+            objects.push(JSON.parse(candidate));
+          } catch (e) {
+            // Ignore parse errors for unfinished objects
+          }
+          startIdx = -1;
+        }
+      }
+    }
+  }
+  return objects;
+}
+
+function extractChatContent(objects) {
+  let text = '';
+  const suggestions = [];
+
+  for (const obj of objects) {
+    if (obj.answer && Array.isArray(obj.answer.replies)) {
+      for (const reply of obj.answer.replies) {
+        if (reply.groundedContent && reply.groundedContent.content) {
+          const content = reply.groundedContent.content;
+          if (typeof content.text === 'string') {
+            text += content.text;
+          }
+          if (content.inlineData && content.inlineData.mimeType === 'application/json+suggestions') {
+            try {
+              // Decode base64 encoded suggested follow-ups
+              const decoded = atob(content.inlineData.data);
+              const dataObj = JSON.parse(decoded);
+              if (dataObj.recommendedQuestionsResponse && Array.isArray(dataObj.recommendedQuestionsResponse.questions)) {
+                dataObj.recommendedQuestionsResponse.questions.forEach(q => {
+                  if (!suggestions.includes(q)) {
+                    suggestions.push(q);
+                  }
+                });
+              }
+            } catch (err) {
+              console.error('Error parsing suggestions:', err);
+            }
+          }
+        }
+      }
+    }
+    
+    // Also fallback to simpler keys in case it is a flatter structure
+    if (!text) {
+      if (obj.answer && typeof obj.answer.answerText === 'string') {
+        text = obj.answer.answerText;
+      } else if (obj.answerText && typeof obj.answerText === 'string') {
+        text = obj.answerText;
+      } else if (obj.text && typeof obj.text === 'string') {
+        text = obj.text;
+      } else if (obj.content && typeof obj.content === 'string') {
+        text = obj.content;
+      }
+    }
+  }
+
+  return { text, suggestions };
+}
+
+function parseMarkdownToHtml(md) {
+  if (!md) return '';
+  
+  let html = md;
+
+  // Escape HTML tags to prevent XSS except the ones we generate
+  html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // 1. Code blocks
+  html = html.replace(/```([\s\S]+?)```/g, function(match, code) {
+    return `<pre class="chat-code-block"><code>${code.trim()}</code></pre>`;
+  });
+  html = html.replace(/`([^`\n]+?)`/g, '<code>$1</code>');
+
+  // 2. Tables
+  const lines = html.split('\n');
+  let inTable = false;
+  let tableHtml = '';
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith('|') && line.endsWith('|')) {
+      if (!inTable) {
+        inTable = true;
+        tableHtml = '<div class="table-wrap"><table>';
+        // Header columns
+        const cols = line.split('|').map(c => c.trim()).filter((c, idx, arr) => idx > 0 && idx < arr.length - 1);
+        tableHtml += '<thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+      } else {
+        if (line.includes('---')) {
+          continue;
+        }
+        const cols = line.split('|').map(c => c.trim()).filter((c, idx, arr) => idx > 0 && idx < arr.length - 1);
+        tableHtml += '<tr>' + cols.map(c => `<td>${c}</td>`).join('') + '</tr>';
+      }
+      lines[i] = ''; 
+    } else {
+      if (inTable) {
+        inTable = false;
+        tableHtml += '</tbody></table></div>';
+        lines[i] = tableHtml + '\n' + lines[i];
+        tableHtml = '';
+      }
+    }
+  }
+  if (inTable) {
+    tableHtml += '</tbody></table></div>';
+    lines.push(tableHtml);
+  }
+  html = lines.filter(l => l !== '').join('\n');
+
+  // 3. Headers (### or ## or #)
+  html = html.replace(/^### (.*?)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.*?)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.*?)$/gm, '<h1>$1</h1>');
+
+  // 4. Bold and italics
+  html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+
+  // 5. Bullet Lists
+  html = html.replace(/^\s*[\*\-]\s+(.*?)$/gm, '<li>$1</li>');
+  html = html.replace(/(<li>[\s\S]+?<\/li>)/g, '<ul>$1</ul>');
+  html = html.replace(/<\/ul>\s*<ul>/g, '');
+
+  // 6. Paragraphs and Line Breaks
+  const blocks = html.split(/\n{2,}/);
+  html = blocks.map(block => {
+    const trimmed = block.trim();
+    if (!trimmed) return '';
+    if (trimmed.startsWith('<h') || trimmed.startsWith('<ul') || trimmed.startsWith('<div') || trimmed.startsWith('<pre') || trimmed.startsWith('<li>')) {
+      return trimmed;
+    }
+    return `<p>${trimmed.replace(/\n/g, '<br>')}</p>`;
+  }).join('');
+
+  return html;
+}
+
+function applySuggestion(suggestionText) {
+  const textarea = document.getElementById('api-body');
+  if (!textarea) return;
+  
+  try {
+    const body = JSON.parse(textarea.value);
+    if (body && body.query) {
+      body.query.text = suggestionText;
+      textarea.value = JSON.stringify(body, null, 2);
+    } else {
+      textarea.value = JSON.stringify({ query: { text: suggestionText } }, null, 2);
+    }
+  } catch {
+    textarea.value = JSON.stringify({ query: { text: suggestionText } }, null, 2);
+  }
+  
+  const sendBtn = document.getElementById('btn-send');
+  if (sendBtn) {
+    sendBtn.focus();
+    sendBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    sendBtn.classList.add('pulse-highlight');
+    setTimeout(() => {
+      sendBtn.classList.remove('pulse-highlight');
+    }, 2400);
+  }
+}
+
+function renderChatResponse(containerId, text, suggestions) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  
+  // Render Markdown to HTML
+  container.innerHTML = parseMarkdownToHtml(text);
+  
+  // Render interactive suggestion chips if suggestions are present
+  if (Array.isArray(suggestions) && suggestions.length > 0) {
+    const chipsContainer = document.createElement('div');
+    chipsContainer.className = 'suggestion-chips-container';
+    
+    suggestions.forEach(q => {
+      const chip = document.createElement('div');
+      chip.className = 'suggestion-chip';
+      chip.textContent = q;
+      chip.addEventListener('click', () => applySuggestion(q));
+      chipsContainer.appendChild(chip);
+    });
+    
+    container.appendChild(chipsContainer);
+  }
+}
+
+// ---- Engine Combo Box Preloading ----
+async function pullAndPopulateEngines() {
+  const c = cfg();
+  if (!c.project) return;
+  
+  const token = await getValidToken();
+  if (!token) return;
+  
+  const bUrl = baseUrl(c);
+  const url = `${bUrl}/projects/${c.project}/locations/${c.region}/collections/${c.collection}/engines`;
+  
+  const resp = await fetch('/api/proxy', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      url,
+      method: 'GET',
+      project: c.project
+    })
+  });
+  
+  if (!resp.ok) return;
+  
+  const data = await resp.json();
+  const datalist = document.getElementById('engines-list');
+  if (!datalist) return;
+  
+  datalist.innerHTML = '';
+  if (data.engines && Array.isArray(data.engines)) {
+    data.engines.forEach(eng => {
+      const parts = eng.name.split('/');
+      const engineId = parts[parts.length - 1];
+      
+      const option = document.createElement('option');
+      option.value = engineId;
+      option.textContent = eng.displayName || engineId;
+      datalist.appendChild(option);
+    });
+  }
+}
+
+// Attach engine autofocus preloader
+document.getElementById('cfg-engine').addEventListener('focus', async () => {
+  const input = document.getElementById('cfg-engine');
+  if (!input.value.trim()) {
+    const oldPlaceholder = input.placeholder;
+    input.placeholder = 'Fetching engines list...';
+    try {
+      await pullAndPopulateEngines();
+    } catch (e) {
+      console.error('Failed to pre-populate engines:', e);
+    } finally {
+      input.placeholder = oldPlaceholder;
+    }
+  }
+});
+
+// ---- Response raw/rendered toggling ----
+const btnToggleRaw = document.getElementById('btn-toggle-raw');
+const btnToggleRendered = document.getElementById('btn-toggle-rendered');
+const preResJson = document.getElementById('res-json');
+const divResRendered = document.getElementById('res-rendered');
+
+btnToggleRaw.addEventListener('click', () => {
+  btnToggleRaw.classList.add('active');
+  btnToggleRendered.classList.remove('active');
+  preResJson.classList.remove('hidden');
+  divResRendered.classList.add('hidden');
+});
+
+btnToggleRendered.addEventListener('click', () => {
+  btnToggleRendered.classList.add('active');
+  btnToggleRaw.classList.remove('active');
+  preResJson.classList.add('hidden');
+  divResRendered.classList.remove('hidden');
+});
 
 // Initialize authentication on load
 initAuth();
