@@ -967,5 +967,42 @@ main {
   box-shadow: 0 0 0 2px rgba(108, 158, 255, 0.1);
 }
 
+/* ---------- Header Active Scopes Badges ---------- */
+.scopes-badge-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.scope-badge {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.scope-badge.scope-gcp {
+  background: rgba(108, 158, 255, 0.1);
+  color: var(--accent);
+  border-color: rgba(108, 158, 255, 0.2);
+}
+
+.scope-badge.scope-gmail {
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--green);
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.scope-badge.scope-drive {
+  background: rgba(251, 191, 36, 0.1);
+  color: var(--amber);
+  border-color: rgba(251, 191, 36, 0.2);
+}
+
 
 

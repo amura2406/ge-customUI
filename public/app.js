@@ -1135,6 +1135,13 @@ function syncStreamAssistFormToJson() {
 
   if (dataStoreSpecs.length > 0) {
     bodyObj.dataStoreSpecs = dataStoreSpecs;
+    if (currentApi.id === 'assistants.streamAssist') {
+      bodyObj.toolsSpec = {
+        vertexAiSearchSpec: {
+          dataStoreSpecs: dataStoreSpecs
+        }
+      };
+    }
   }
 
   document.getElementById('api-body').value = JSON.stringify(bodyObj, null, 2);
@@ -1674,16 +1681,7 @@ async function initAuth() {
     if (savedSecret) document.getElementById('oauth-client-secret').value = savedSecret;
   }
 
-  // Load scope selection preferences
-  const scopeGmail = document.getElementById('scope-gmail-readonly');
-  const scopeDrive = document.getElementById('scope-drive-readonly');
-  const scopeDocs = document.getElementById('scope-docs-readonly');
-  const scopeCustom = document.getElementById('custom-scopes');
 
-  if (scopeGmail) scopeGmail.checked = localStorage.getItem('ge-scope-gmail-readonly') === 'true';
-  if (scopeDrive) scopeDrive.checked = localStorage.getItem('ge-scope-drive-readonly') === 'true';
-  if (scopeDocs) scopeDocs.checked = localStorage.getItem('ge-scope-docs-readonly') === 'true';
-  if (scopeCustom) scopeCustom.value = localStorage.getItem('ge-scope-custom') || '';
 
   const token = await getValidToken();
   const appContainer = document.getElementById('app-container');
@@ -1695,12 +1693,58 @@ async function initAuth() {
     appContainer.classList.remove('hidden');
     loginScreen.classList.add('hidden');
     userBadge.classList.remove('hidden');
-    userEmailSpan.textContent = 'Google Account Connected';
+    userEmailSpan.textContent = 'Google Connected';
+
+    // Fetch and display active scopes for visual verification
+    fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${token}`)
+      .then(res => res.json())
+      .then(info => {
+        if (info.scope) {
+          renderTokenScopes(info.scope);
+        }
+      })
+      .catch(e => console.error('Failed to fetch active token scopes:', e));
   } else {
     appContainer.classList.add('hidden');
     loginScreen.classList.remove('hidden');
     userBadge.classList.add('hidden');
   }
+}
+
+function renderTokenScopes(scopeString) {
+  const scopesList = scopeString.split(' ');
+  const parent = document.getElementById('user-badge');
+  if (!parent) return;
+
+  let scopesDiv = document.getElementById('active-token-scopes');
+  if (!scopesDiv) {
+    scopesDiv = document.createElement('div');
+    scopesDiv.id = 'active-token-scopes';
+    scopesDiv.className = 'scopes-badge-list';
+    // Insert before the logout button
+    const logoutBtn = document.getElementById('btn-logout');
+    parent.insertBefore(scopesDiv, logoutBtn);
+  }
+
+  scopesDiv.innerHTML = '';
+  scopesList.forEach(scope => {
+    let shortName = scope;
+    if (scope.startsWith('https://www.googleapis.com/auth/')) {
+      shortName = scope.replace('https://www.googleapis.com/auth/', '');
+    }
+    const span = document.createElement('span');
+    span.className = 'scope-badge';
+    if (scope.includes('gmail')) {
+      span.className += ' scope-gmail';
+    } else if (scope.includes('drive')) {
+      span.className += ' scope-drive';
+    } else if (scope.includes('cloud-platform')) {
+      span.className += ' scope-gcp';
+    }
+    span.textContent = shortName;
+    span.title = scope;
+    scopesDiv.appendChild(span);
+  });
 }
 
 function logout() {
@@ -1731,29 +1775,13 @@ document.getElementById('btn-login-google').addEventListener('click', () => {
     localStorage.setItem('ge-client-secret', clientSecret);
   }
 
-  // Save selected scopes in localStorage
-  const scopeGmail = document.getElementById('scope-gmail-readonly');
-  const scopeDrive = document.getElementById('scope-drive-readonly');
-  const scopeDocs = document.getElementById('scope-docs-readonly');
-  const scopeCustom = document.getElementById('custom-scopes');
-
-  localStorage.setItem('ge-scope-gmail-readonly', scopeGmail ? scopeGmail.checked : 'false');
-  localStorage.setItem('ge-scope-drive-readonly', scopeDrive ? scopeDrive.checked : 'false');
-  localStorage.setItem('ge-scope-docs-readonly', scopeDocs ? scopeDocs.checked : 'false');
-  localStorage.setItem('ge-scope-custom', scopeCustom ? scopeCustom.value.trim() : '');
-
-  // Gather all scopes
-  const scopes = ['https://www.googleapis.com/auth/cloud-platform'];
-  if (scopeGmail && scopeGmail.checked) scopes.push('https://www.googleapis.com/auth/gmail.readonly');
-  if (scopeDrive && scopeDrive.checked) scopes.push('https://www.googleapis.com/auth/drive.readonly');
-  if (scopeDocs && scopeDocs.checked) scopes.push('https://www.googleapis.com/auth/documents.readonly');
-  
-  if (scopeCustom && scopeCustom.value.trim()) {
-    const customList = scopeCustom.value.trim().split(/\s+/);
-    customList.forEach(s => {
-      if (s && !scopes.includes(s)) scopes.push(s);
-    });
-  }
+  // Gather required scopes
+  const scopes = [
+    'https://www.googleapis.com/auth/cloud-platform',
+    'https://www.googleapis.com/auth/discoveryengine.assist.readwrite',
+    'https://www.googleapis.com/auth/discoveryengine.readwrite',
+    'https://www.googleapis.com/auth/discoveryengine.serving.readwrite'
+  ];
   const scopeString = scopes.join(' ');
 
   let loginUrl = `/api/auth/login?scope=${encodeURIComponent(scopeString)}`;
